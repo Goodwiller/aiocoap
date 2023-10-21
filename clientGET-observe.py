@@ -13,25 +13,39 @@ import asyncio
 
 from aiocoap import *
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
+
 
 async def main():
     protocol = await Context.create_client_context()
 
-    request = Message(code=GET, uri='coap://vs0.inf.ethz.ch/obs', observe=0)
+    request_msg = Message(code=GET, uri='coap://localhost/time', observe = 0)
 
-    pr = protocol.request(request)
+    request_obj = protocol.request(request_msg)
 
-    r = await pr.response
-    print("First response: %s\n%r"%(r, r.payload))
+    counter = 0
+    async for r in request_obj.observation:
+        print(r.payload)
+        print("_________________________________")
+        counter = counter + 1
+        if (counter == 3):
+            break
 
-    async for r in pr.observation:
-        print("Next result: %s\n%r"%(r, r.payload))
+    await asyncio.sleep(10)
 
-        pr.observation.cancel()
-        break
-    print("Loop ended, sticking around")
-    await asyncio.sleep(50)
+    request_obj_new = await protocol.re_register(request_obj)
+
+    counter = 0
+    async for r in request_obj_new.observation:
+        print(r.payload)
+        print("_________________________________")
+        counter = counter + 1
+        if (counter == 3):
+            break
+
+    await protocol.cancel_observation(request_obj_new, urgent = True)
+
+    await asyncio.sleep(10)
 
 if __name__ == "__main__":
     asyncio.run(main())

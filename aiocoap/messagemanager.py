@@ -97,10 +97,14 @@ class MessageManager(interfaces.TokenInterface, interfaces.MessageManager):
         if message.mtype in (ACK, RST):
             self._remove_exchange(message)
 
+        # if message.mtype is RST and str(message.code) == "GET":
+        #     print("RESET message received")
         if message.code is EMPTY and message.mtype is CON:
             self._process_ping(message)
-        elif message.code is EMPTY and message.mtype in (ACK, RST):
+        elif message.code is EMPTY and message.mtype is ACK:
             pass # empty ack has already been handled above
+        elif message.code is EMPTY and message.mtype is RST:
+            self.log.debug("Received empty RST from %s.", message.remote)
         elif message.code.is_request() and message.mtype in (CON, NON):
             # the request handler will have to deal with sending ACK itself, as
             # it might be timeout-related
@@ -114,7 +118,7 @@ class MessageManager(interfaces.TokenInterface, interfaces.MessageManager):
                 # A peer mustn't send a CON to multicast, but if a malicious
                 # peer does, we better not answer
                 if message.mtype == CON and not message.remote.is_multicast_locally:
-                    self.log.info("Response not recognized - sending RST.")
+                    self.log.info("Response not recognized or Client not interested anymore - sending RST.")
                     rst = Message(mtype=RST, mid=message.mid, code=EMPTY, payload='')
                     rst.remote = message.remote.as_response_address()
                     self._send_initially(rst)

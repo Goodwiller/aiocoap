@@ -105,14 +105,23 @@ class TokenManager(interfaces.RequestInterface, interfaces.TokenManager):
     def process_request(self, request):
         key = (request.token, request.remote)
 
-        if key in self.incoming_requests:
+        duplicate_entry = None
+        for  i in self.incoming_requests:
+             if (i[1].sockaddr[0] == request.remote.sockaddr[0] and i[0] == request.token):
+                duplicate_entry = i
+                break
+                
+        if duplicate_entry is not None:
             # This is either a "I consider that token invalid, probably forgot
             # about it, but here's a new request" or renewed interest in an
             # observation, which gets modelled as a new request at thislevel
             self.log.debug("Incoming request overrides existing request")
             # Popping: FIXME Decide if one of them is sufficient (see `del self.incoming_requests[key]` below)
-            (pipe, stop) = self.incoming_requests.pop(key)
+            (pipe, stop) = self.incoming_requests.pop(i)
             stop()
+            if (request.opt.observe == 1):
+                self.log.debug("Client Observation removed")
+                return True
 
         pipe = Pipe(request, self.log)
 
@@ -171,7 +180,7 @@ class TokenManager(interfaces.RequestInterface, interfaces.TokenManager):
         try:
             request = self.outgoing_requests[key]
         except KeyError:
-            self.log.info("Response %r could not be matched to any request", response)
+            self.log.info("Response %r could not be matched to any request (Client may not be interested in the resource anymore)", response)
             return False
         else:
             self.log.debug("Response %r matched to request %r", response, request)
@@ -200,7 +209,7 @@ class TokenManager(interfaces.RequestInterface, interfaces.TokenManager):
     async def fill_or_recognize_remote(self, message):
         return await self.token_interface.fill_or_recognize_remote(message)
 
-    def request(self, request):
+    def request(self, request, token = None):
         msg = request.request
 
         assert msg.code.is_request(), "Message code is not valid for request"
@@ -211,7 +220,10 @@ class TokenManager(interfaces.RequestInterface, interfaces.TokenManager):
 
         # FIXME: pick a suitably short one where available, and a longer one
         # for observations if many short ones are already in-flight
-        msg.token = self.next_token()
+        if (token is None):
+            msg.token = self.next_token()
+        else:
+            msg.token = token
 
         self.log.debug("Sending request - Token: %s, Remote: %s", msg.token.hex(), msg.remote)
 
@@ -251,3 +263,16 @@ class TokenManager(interfaces.RequestInterface, interfaces.TokenManager):
             key = (msg.token, msg.remote)
         self.outgoing_requests[key] = request
         request.on_interest_end(functools.partial(self.outgoing_requests.pop, key, None))
+
+        return msg.token
+
+    def cancel_observation(self, request_obj, remote, token, urgent):
+        key = (token, remote)
+        if key not in self.outgoing_requests:
+            key = (token, None)
+        if (urgent):
+            request_obj._pipe.request.opt.observe = 1
+            self.request(request_obj._pipe, token)
+        self.outgoing_requests.pop(key)
+
+        

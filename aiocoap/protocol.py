@@ -335,7 +335,7 @@ class Context(interfaces.RequestProvider):
                 return ri
         raise RuntimeError("No request interface could route message")
 
-    def request(self, request_message, handle_blockwise=True):
+    def request(self, request_message, handle_blockwise=False):
         if handle_blockwise:
             return BlockwiseRequest(self, request_message)
 
@@ -346,7 +346,10 @@ class Context(interfaces.RequestProvider):
         async def send():
             try:
                 request_interface = await self.find_remote_and_interface(request_message)
-                request_interface.request(pipe)
+                if (result._pipe.request.opt.observe == 1):
+                    request_interface.request(pipe)
+                else:
+                    result.observation.token = request_interface.request(pipe)
             except Exception as e:
                 pipe.add_exception(e)
                 return
@@ -377,6 +380,54 @@ class Context(interfaces.RequestProvider):
             return
 
         return await self.serversite.render_to_pipe(pipe)
+
+    async def re_register(self, request_obj, handle_blockwise=False):
+        if handle_blockwise:
+            raise Exception("Re-register function currently does not work for Blockwise requests.")
+        if (request_obj.observation.cancelled):
+            raise Exception("Cannot reregister a cancelled object..")
+
+        pipe = Pipe(request_obj._pipe.request, self.log)
+        
+        result = Request(pipe, self.loop, self.log)
+
+        async def send():
+            try:
+                request_interface = await self.find_remote_and_interface(request_obj._pipe.request)
+                if (result._pipe.request.opt.observe == 1):
+                    request_interface.request(pipe, request_obj.observation.token)
+                else:
+                    result.observation.token = request_interface.request(pipe, request_obj.observation.token)
+            except Exception as e:
+                pipe.add_exception(e)
+                return
+        self.loop.create_task(
+                send(),
+                **py38args(name="Request processing of %r" % result)
+                )
+
+        await self.cancel_observation(request_obj)
+
+        return result
+    
+
+    async def cancel_observation(self, request_obj, urgent = False):
+        """Cancel a request that is currently in progress.
+        This method is not part of the stable API yet."""
+        pipe_exists = hasattr(request_obj , '_pipe')
+        if pipe_exists:
+            if (request_obj._pipe.request.opt.observe == 1):
+                self.log.warning("Given request is not an observation.")
+                return
+            if (request_obj.observation.cancelled):
+                return
+            request_interface = await self.find_remote_and_interface(request_obj._pipe.request)
+            request_interface.cancel_observation(request_obj, request_obj._pipe.request.remote, request_obj.observation.token, urgent)
+            request_obj.observation.cancel()
+        else:
+            raise Exception("Cancel function currently does not work for Blockwise requests.")
+    
+
 
 class BaseRequest(object):
     """Common mechanisms of :class:`Request` and :class:`MulticastRequest`"""
@@ -835,6 +886,8 @@ class ClientObservation:
     def __init__(self):
         self.callbacks = []
         self.errbacks = []
+
+        self.token = None
 
         self.cancelled = False
         self._on_cancel = []
